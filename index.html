@@ -1,4 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Message Box</title>
+
+<style>
+body{
+font-family: Arial;
+text-align:center;
+background:#f4f4f4;
+padding:40px;
+}
+
+textarea{
+width:80%;
+height:200px;
+font-size:16px;
+}
+
+button{
+padding:10px 20px;
+font-size:18px;
+cursor:pointer;
+margin-top:10px;
+}
+</style>
+
+</head>
+
+<body>
+
+<h1>Send a Message</h1>
+
+<textarea id="message" maxlength="100000"></textarea>
+
+<br>
+
+<button onclick="sendMessage()">Send</button>
+
+<p id="status"></p>
+
 <script>
+
 async function sendMessage(){
 
 let message=document.getElementById("message").value
@@ -31,4 +73,8 @@ document.getElementById("status").innerText="Error sending message"
 }
 
 }
+
 </script>
+
+</body>
+</html>
