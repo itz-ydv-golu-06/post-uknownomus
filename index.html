@@ -5,7 +5,7 @@
 
 <style>
 body{
-font-family: Arial;
+font-family:Arial;
 text-align:center;
 background:#f4f4f4;
 padding:40px;
@@ -31,17 +31,14 @@ margin-top:10px;
 
 <h1>Send a Message</h1>
 
-<textarea id="message" maxlength="100000"></textarea>
+<textarea id="message" maxlength="100000" placeholder="Write your message"></textarea>
 
 <br>
-
 <button onclick="sendMessage()">Send</button>
-
-<p id="status"></p>
 
 <script>
 
-async function sendMessage(){
+function sendMessage(){
 
 let message=document.getElementById("message").value
 
@@ -50,27 +47,9 @@ alert("Write something first")
 return
 }
 
-document.getElementById("status").innerText="Sending..."
+let url="https://github.com/itz-ydv-golu-06/post-uknownomus/issues/new?title=New%20Message&body="+encodeURIComponent(message)
 
-const response=await fetch("https://api.github.com/repos/itz-ydv-golu-06/post-uknownomus/issues",{
-method:"POST",
-headers:{
-"Authorization":"token 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",
-"Accept":"application/vnd.github+json",
-"Content-Type":"application/json"
-},
-body:JSON.stringify({
-title:"New Message",
-body:message
-})
-})
-
-if(response.ok){
-document.getElementById("status").innerText="Message sent!"
-document.getElementById("message").value=""
-}else{
-document.getElementById("status").innerText="Error sending message"
-}
+window.open(url,"_blank")
 
 }
 
