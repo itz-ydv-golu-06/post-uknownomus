@@ -14,7 +14,7 @@ const WALK_SPEED=30;
 const SPRINT_SPEED=40;
 const GRAVITY=-200;
 const JUMP_SPEED=40;
-const PLAYER_RADIUS=22;
+const PLAYER_RADIUS=2;
 const CELL_SIZE=70;
 
 let player={x:0,y:GROUND_Y+EYE_HEIGHT,z:1500,yaw:Math.PI,pitch:0};
