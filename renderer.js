@@ -55,6 +55,9 @@ uniform vec3 uCameraPos;
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uAmbientColor;
 
 vec2 transformedUV(vec2 uv){
   vec2 p=uv*uUVScale+uUVOffset;
@@ -73,9 +76,10 @@ void main(){
   vec3 N=normalize(vNormal);
   vec3 V=normalize(uCameraPos-vWorldPos);
 
-  // A simple native-WebGL PBR-style direct light. No external engine is used.
-  vec3 L1=normalize(vec3(-0.45,0.85,0.35));
-  vec3 L2=normalize(vec3(0.55,0.35,-0.25));
+  // Sun moves across the sky over the day/night cycle (see updateDayNight in JS);
+  // L2 stays a fixed dim sky-fill light so shadowed faces aren't pure black.
+  vec3 L1=normalize(uSunDir);
+  vec3 L2=normalize(vec3(0.35,0.45,-0.55));
   float ndl1=max(dot(N,L1),0.0);
   float ndl2=max(dot(N,L2),0.0);
   vec3 H1=normalize(L1+V);
@@ -100,9 +104,9 @@ void main(){
   vec3 diffuse=albedo*(1.0-metallic)/3.14159;
   vec3 spec=F0*specPow*(1.0-0.35*rough);
 
-  vec3 lighting=albedo*(0.18+0.82*ao)+
-                diffuse*(1.10*ndl1+0.42*ndl2)+
-                spec*(1.0*ndl1+0.35*ndl2);
+  vec3 lighting=albedo*uAmbientColor*(0.5+0.5*ao)+
+                diffuse*uSunColor*(1.10*ndl1)+diffuse*0.12*ndl2+
+                spec*uSunColor*ndl1+spec*0.10*ndl2;
 
   if(uHasEmissive==1){
     vec3 e=srgbToLinear(texture(uEmissive,uv).rgb)*uEmissiveFactor;
@@ -152,7 +156,10 @@ const U={
   cameraPos:gl.getUniformLocation(program,"uCameraPos"),
   fogStart:gl.getUniformLocation(program,"uFogStart"),
   fogEnd:gl.getUniformLocation(program,"uFogEnd"),
-  fogColor:gl.getUniformLocation(program,"uFogColor")
+  fogColor:gl.getUniformLocation(program,"uFogColor"),
+  sunDir:gl.getUniformLocation(program,"uSunDir"),
+  sunColor:gl.getUniformLocation(program,"uSunColor"),
+  ambientColor:gl.getUniformLocation(program,"uAmbientColor")
 };
 
 function b64ToBytes(s){
@@ -374,13 +381,57 @@ function bindTexture(unit,tex){
 }
 
 const RENDER_DISTANCE=1100;   // beyond this, fog fully hides geometry — tune to taste
-const FOG_COLOR=[0.035,0.045,0.055];
+
+/* ---- Day/night cycle: dayTime is hours 0-24, advancing automatically as the
+   game runs. Sun direction, sun color, ambient color, and fog/sky color are
+   all derived from it each frame — see updateDayNight(). Keys , and . nudge
+   time manually (wired up in player.js) for quick testing. */
+let dayTime=8;                  // start at 8am
+const DAY_LENGTH_SECONDS=300;   // one full 24h cycle = 5 real minutes
+const timeEl=document.getElementById("time");
+
+const NIGHT_AMBIENT=[0.05,0.06,0.11], DAY_AMBIENT=[0.55,0.58,0.63];
+const SUN_DAY_COLOR=[1.0,0.97,0.92], SUN_WARM_COLOR=[1.0,0.52,0.26];
+const NIGHT_FOG=[0.02,0.025,0.05], DAY_FOG=[0.55,0.66,0.78], TWILIGHT_FOG=[0.85,0.5,0.32];
+
+function lerp3(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+function smooth01(edge0,edge1,x){
+  const t=Math.max(0,Math.min(1,(x-edge0)/(edge1-edge0)));
+  return t*t*(3-2*t);
+}
+
+let sunDir=[0,1,0], sunColor=SUN_DAY_COLOR, ambientColor=DAY_AMBIENT, skyColor=DAY_FOG;
+function updateDayNight(dt){
+  dayTime=(dayTime+(dt/DAY_LENGTH_SECONDS)*24+24)%24;
+
+  const angle=(dayTime/24)*Math.PI*2-Math.PI/2;
+  const elevation=Math.sin(angle);
+  sunDir=[Math.cos(angle)*0.6, elevation, 0.35];
+
+  const dayFactor=smooth01(-0.12,0.12,elevation);       // 0 at night, 1 in daytime
+  const horizonCloseness=1-Math.min(1,Math.abs(elevation)*3); // peaks at sunrise/sunset
+
+  ambientColor=lerp3(NIGHT_AMBIENT,DAY_AMBIENT,dayFactor);
+  const sunBase=lerp3(SUN_DAY_COLOR,SUN_WARM_COLOR,horizonCloseness);
+  sunColor=[sunBase[0]*dayFactor,sunBase[1]*dayFactor,sunBase[2]*dayFactor];
+
+  skyColor=lerp3(NIGHT_FOG,DAY_FOG,dayFactor);
+  skyColor=lerp3(skyColor,TWILIGHT_FOG,horizonCloseness*0.7);
+
+  if(timeEl){
+    const h24=Math.floor(dayTime), m=Math.floor((dayTime-h24)*60);
+    const ampm=h24>=12?"PM":"AM";
+    const h12=((h24+11)%12)+1;
+    timeEl.textContent=`${h12}:${m.toString().padStart(2,"0")} ${ampm}`;
+  }
+}
 
 let frames=0,fpsTimer=0;
 function render(now){
   const dt=Math.min((now-lastTime)/1000,0.05);
   lastTime=now;
   updatePlayer(dt);
+  updateDayNight(dt);
   resize();
 
   const camState=freeCam?freeCamPos:player;
@@ -395,7 +446,7 @@ function render(now){
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LEQUAL);
   gl.disable(gl.CULL_FACE);
-  gl.clearColor(FOG_COLOR[0],FOG_COLOR[1],FOG_COLOR[2],1);
+  gl.clearColor(skyColor[0],skyColor[1],skyColor[2],1);
   gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
   gl.useProgram(program);
   gl.uniformMatrix4fv(U.projection,false,projection);
@@ -404,7 +455,10 @@ function render(now){
   gl.uniform3fv(U.cameraPos,eye);
   gl.uniform1f(U.fogStart,RENDER_DISTANCE*0.55);
   gl.uniform1f(U.fogEnd,RENDER_DISTANCE);
-  gl.uniform3fv(U.fogColor,FOG_COLOR);
+  gl.uniform3fv(U.fogColor,skyColor);
+  gl.uniform3fv(U.sunDir,sunDir);
+  gl.uniform3fv(U.sunColor,sunColor);
+  gl.uniform3fv(U.ambientColor,ambientColor);
 
   updateFrustumPlanes(projection,view);
   drawnTrisLastFrame=0;

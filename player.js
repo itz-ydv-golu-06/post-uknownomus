@@ -47,6 +47,8 @@ window.addEventListener("keydown",e=>{
     colliderHintEl.style.display="block";
     colliderHintEl.textContent=freeCam?"Free cam: ON (W/A/S/D fly, Space up, Shift down)":"Free cam: OFF";
   }
+  if(e.code==="Comma") dayTime=(dayTime-1+24)%24;
+  if(e.code==="Period") dayTime=(dayTime+1)%24;
 });
 window.addEventListener("keyup",e=>{keys[e.code]=false;});
 
