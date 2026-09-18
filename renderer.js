@@ -456,7 +456,46 @@ function drawSky(eye,dir){
    from a smooth multi-octave sine field (and matching normals from its exact
    analytic gradient), so it actually rolls like hills. The road network,
    bridges, and railings are left completely untouched — same flat geometry,
-   same collision, same bridge rigidity as before. */
+   same collision, same bridge rigidity as before.
+
+   The road network isn't a neat circle around the origin — it's an irregular
+   sprawl reaching ~1400 units out in places — so hills can't just fade with
+   distance from (0,0); that let terrain rise up through roads far from
+   center. Instead, buildRoadMask() bins every non-terrain vertex's (x,z)
+   into a coarse grid once at load, and roadProximity() checks real nearby
+   occupancy so hills only appear in genuinely open gaps between roads. */
+const ROAD_MASK_CELL=120;
+let roadMaskCells=null;
+
+function buildRoadMask(){
+  roadMaskCells=new Set();
+  for(const item of MODEL){
+    if(item.name==="Plane_Material.001_0") continue;
+    const bytes=b64ToBytes(item.vertex_b64);
+    const pos=new Float32Array(bytes.buffer,bytes.byteOffset,bytes.byteLength>>2);
+    for(let v=0;v<pos.length;v+=8){
+      const cx=Math.floor(pos[v]/ROAD_MASK_CELL), cz=Math.floor(pos[v+2]/ROAD_MASK_CELL);
+      roadMaskCells.add(cx+","+cz);
+    }
+  }
+}
+
+function roadProximity(x,z){
+  const cx=Math.floor(x/ROAD_MASK_CELL), cz=Math.floor(z/ROAD_MASK_CELL);
+  const MAX_RING=6;
+  for(let ring=0;ring<=MAX_RING;ring++){
+    for(let dx=-ring;dx<=ring;dx++){
+      for(let dz=-ring;dz<=ring;dz++){
+        if(Math.max(Math.abs(dx),Math.abs(dz))!==ring) continue;
+        if(roadMaskCells.has((cx+dx)+","+(cz+dz))){
+          return ring*ROAD_MASK_CELL;
+        }
+      }
+    }
+  }
+  return (MAX_RING+1)*ROAD_MASK_CELL;
+}
+
 function terrainHeight(x,z){
   const s1x=x*0.0012,s1z=z*0.0011, s2x=x*0.0035,s2z=z*0.0031, s3x=x*0.008,s3z=z*0.009;
   const a1=55,a2=22,a3=9;
@@ -469,11 +508,10 @@ function terrainHeight(x,z){
   let dhdz=-a1*0.0011*Math.sin(s1x+1.3)*Math.sin(s1z-0.7)
            -a2*0.0031*Math.sin(s2x-2.1)*Math.sin(s2z+1.9)
            +a3*0.009*Math.sin(s3x+0.4)*Math.cos(s3z-1.1);
-  // Fade the hills out near the city (road network sits roughly within 600
-  // units of the origin) so terrain never rises up through the road, and
-  // ramp to full height once clear of it, out toward the map edge.
-  const dist=Math.hypot(x,z);
-  const falloff=smooth01(600,1500,dist);
+  // Fade hills to flat near actual road geometry, ramp to full height in
+  // genuinely open gaps between roads.
+  const dist=roadMaskCells?roadProximity(x,z):999;
+  const falloff=smooth01(260,620,dist);
   h*=falloff; dhdx*=falloff; dhdz*=falloff;
   return [h,dhdx,dhdz];
 }
@@ -504,6 +542,7 @@ function generateTerrainGrid(halfExtent,baseY,res){
 const geometry=[];
 let totalTrisAll=0, drawnTrisLastFrame=0;
 function buildGeometry(){
+  buildRoadMask();
   const groundArr=[], colliderArr=[];
   for(const item of MODEL){
     let bytes,ib,pos,idx;
