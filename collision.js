@@ -141,3 +141,41 @@ function resolveWalls(px,pz){
   return [px,pz];
 }
 
+/* ---- Player collider viewer: a wireframe cylinder (2 circles + 4 struts) at
+   the player's actual position/radius, rebuilt every frame since the player
+   moves. Lets you fly around in free cam (F) and see exactly what the player's
+   own collision cylinder looks like relative to the walls/ground wireframe. */
+const PLAYER_DEBUG_SEGMENTS=24;
+let playerColliderVAO=null, playerColliderVBO=null;
+const PLAYER_DEBUG_MAX_VERTS=(PLAYER_DEBUG_SEGMENTS*2*2)+8;
+
+function initPlayerColliderDebug(){
+  playerColliderVAO=gl.createVertexArray();
+  gl.bindVertexArray(playerColliderVAO);
+  playerColliderVBO=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,playerColliderVBO);
+  gl.bufferData(gl.ARRAY_BUFFER,PLAYER_DEBUG_MAX_VERTS*3*4,gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+  gl.bindVertexArray(null);
+}
+
+function updatePlayerColliderDebug(cx,cz,yBot,yTop){
+  const verts=[];
+  for(let i=0;i<PLAYER_DEBUG_SEGMENTS;i++){
+    const a0=(i/PLAYER_DEBUG_SEGMENTS)*Math.PI*2, a1=((i+1)/PLAYER_DEBUG_SEGMENTS)*Math.PI*2;
+    const x0=cx+Math.cos(a0)*PLAYER_RADIUS, z0=cz+Math.sin(a0)*PLAYER_RADIUS;
+    const x1=cx+Math.cos(a1)*PLAYER_RADIUS, z1=cz+Math.sin(a1)*PLAYER_RADIUS;
+    verts.push(x0,yBot,z0, x1,yBot,z1);
+    verts.push(x0,yTop,z0, x1,yTop,z1);
+  }
+  for(let i=0;i<4;i++){
+    const a=(i/4)*Math.PI*2;
+    const x=cx+Math.cos(a)*PLAYER_RADIUS, z=cz+Math.sin(a)*PLAYER_RADIUS;
+    verts.push(x,yBot,z, x,yTop,z);
+  }
+  const arr=new Float32Array(verts);
+  gl.bindBuffer(gl.ARRAY_BUFFER,playerColliderVBO);
+  gl.bufferSubData(gl.ARRAY_BUFFER,0,arr);
+  return arr.length/3;
+}

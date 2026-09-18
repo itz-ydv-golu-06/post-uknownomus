@@ -241,13 +241,21 @@ let lastTime=performance.now();
 
 async function start(){
   try{
-    const texPromises=Object.keys(TEXTURES).map(k=>loadTexture(TEXTURES[k]).then(t=>{textures[Number(k)]=t;}));
+    const texPromises=Object.keys(TEXTURES).map(k=>
+      loadTexture(TEXTURES[k])
+        .then(t=>{textures[Number(k)]=t;})
+        .catch(err=>{console.warn(`Texture ${k} failed to load (${TEXTURES[k]}):`,err.message);})
+    );
     statusEl.textContent="Building geometry and colliders…";
     buildGeometry();
     await Promise.all(texPromises);
     const g=raycastGroundHeight(player.x,player.z,1e9);
     if(g!==null){lastGroundY=g;player.y=g+EYE_HEIGHT;}
-    statusEl.textContent=`Ready • ${geometry.length} mesh parts • ${MATERIALS.length} materials — click to walk`;
+    initPlayerColliderDebug();
+    const missing=Object.keys(TEXTURES).filter(k=>!textures[Number(k)]).length;
+    statusEl.textContent=missing>0
+      ? `Ready • ${geometry.length} mesh parts • ${missing} texture(s) missing (untextured) — click to walk`
+      : `Ready • ${geometry.length} mesh parts • ${MATERIALS.length} materials — click to walk`;
     lastTime=performance.now();
     requestAnimationFrame(render);
   }catch(err){
@@ -268,8 +276,9 @@ function render(now){
   updatePlayer(dt);
   resize();
 
-  const eye=[player.x,player.y,player.z];
-  const dir=cameraDirection();
+  const camState=freeCam?freeCamPos:player;
+  const eye=freeCam?[freeCamPos.x,freeCamPos.y,freeCamPos.z]:[player.x,player.y,player.z];
+  const dir=cameraDirection(camState);
   const target=[eye[0]+dir[0],eye[1]+dir[1],eye[2]+dir[2]];
   const aspect=canvas.width/canvas.height;
   mat4Perspective(projection,Math.PI/4,aspect,0.5,20000);
@@ -327,6 +336,12 @@ function render(now){
       gl.uniform3fv(DU.color,[1.0,0.15,0.15]);
       gl.bindVertexArray(wallLineVAO);
       gl.drawArrays(gl.LINES,0,wallLineCount);
+    }
+    if(playerColliderVAO){
+      const pCount=updatePlayerColliderDebug(player.x,player.z,player.y-EYE_HEIGHT,player.y);
+      gl.uniform3fv(DU.color,[1.0,0.9,0.1]);
+      gl.bindVertexArray(playerColliderVAO);
+      gl.drawArrays(gl.LINES,0,pCount);
     }
     gl.bindVertexArray(null);
     gl.enable(gl.DEPTH_TEST);
