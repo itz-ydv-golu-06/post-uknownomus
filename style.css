@@ -33,3 +33,22 @@ body.touch-device #lockhint{display:none}
   pointer-events:auto;touch-action:none}
 #colliderBtnTouch{right:14px;top:56px}
 #freecamBtnTouch{right:62px;top:56px}
+
+/* ---- Tap-to-start overlay: fullscreen + orientation lock need a real user
+   gesture, so this button is what supplies it. Only shown on touch devices. ---- */
+#touchStartOverlay{display:none;position:fixed;inset:0;z-index:50;background:rgba(6,8,10,.92);
+  color:#fff;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  text-align:center;padding:24px;font-size:14px}
+body.touch-device #touchStartOverlay.visible{display:flex}
+#touchStartBtn{background:#2a7dff;color:#fff;border:none;padding:15px 30px;border-radius:12px;
+  font-size:16px;font-weight:700;letter-spacing:.02em}
+
+/* ---- Rotate-device fallback: pure CSS media query, works even where the
+   Screen Orientation Lock API doesn't (iOS Safari). ---- */
+#rotateOverlay{display:none;position:fixed;inset:0;z-index:60;background:#000;color:#fff;
+  flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;
+  padding:24px;font-size:15px}
+#rotateIcon{font-size:44px}
+@media (orientation:portrait){
+  body.touch-device #rotateOverlay{display:flex}
+}

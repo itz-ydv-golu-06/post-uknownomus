@@ -124,6 +124,28 @@ function cameraDirection(state){
 if(isTouchDevice){
   document.body.classList.add("touch-device");
 
+  const touchStartOverlay=document.getElementById("touchStartOverlay");
+  const touchStartBtn=document.getElementById("touchStartBtn");
+  touchStartOverlay.classList.add("visible");
+
+  function goFullscreenAndLockLandscape(){
+    const el=document.documentElement;
+    const req=el.requestFullscreen||el.webkitRequestFullscreen||el.mozRequestFullScreen||el.msRequestFullscreen;
+    const doLock=()=>{
+      if(screen.orientation&&screen.orientation.lock){
+        screen.orientation.lock("landscape").catch(()=>{/* not supported/allowed — the CSS rotate overlay covers this */});
+      }
+    };
+    if(req){
+      Promise.resolve(req.call(el)).then(doLock).catch(doLock);
+    } else {
+      doLock();
+    }
+    touchStartOverlay.classList.remove("visible");
+  }
+  touchStartBtn.addEventListener("touchend",e=>{e.preventDefault();goFullscreenAndLockLandscape();},{passive:false});
+  touchStartBtn.addEventListener("click",goFullscreenAndLockLandscape);
+
   const joyBase=document.getElementById("joystickBase");
   const joyKnob=document.getElementById("joystickKnob");
   const lookZone=document.getElementById("lookZone");
