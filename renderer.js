@@ -448,15 +448,76 @@ function drawSky(eye,dir){
   gl.disable(gl.BLEND);
 }
 
+/* ---- Procedural terrain: the only truly flat, "Minecraft flat world" part
+   of the original map is the giant 2-triangle "Material.001" backdrop plane
+   under/around the city — a single quad can only ever be flat, since GPU
+   rasterization interpolates linearly across a triangle. Below, that one mesh
+   part is swapped out for a properly subdivided grid with per-vertex height
+   from a smooth multi-octave sine field (and matching normals from its exact
+   analytic gradient), so it actually rolls like hills. The road network,
+   bridges, and railings are left completely untouched — same flat geometry,
+   same collision, same bridge rigidity as before. */
+function terrainHeight(x,z){
+  const s1x=x*0.0012,s1z=z*0.0011, s2x=x*0.0035,s2z=z*0.0031, s3x=x*0.008,s3z=z*0.009;
+  const a1=55,a2=22,a3=9;
+  let h=a1*Math.sin(s1x+1.3)*Math.cos(s1z-0.7)
+       +a2*Math.sin(s2x-2.1)*Math.cos(s2z+1.9)
+       +a3*Math.sin(s3x+0.4)*Math.sin(s3z-1.1);
+  let dhdx=a1*0.0012*Math.cos(s1x+1.3)*Math.cos(s1z-0.7)
+           +a2*0.0035*Math.cos(s2x-2.1)*Math.cos(s2z+1.9)
+           +a3*0.008*Math.cos(s3x+0.4)*Math.sin(s3z-1.1);
+  let dhdz=-a1*0.0011*Math.sin(s1x+1.3)*Math.sin(s1z-0.7)
+           -a2*0.0031*Math.sin(s2x-2.1)*Math.sin(s2z+1.9)
+           +a3*0.009*Math.sin(s3x+0.4)*Math.cos(s3z-1.1);
+  // Fade the hills out near the city (road network sits roughly within 600
+  // units of the origin) so terrain never rises up through the road, and
+  // ramp to full height once clear of it, out toward the map edge.
+  const dist=Math.hypot(x,z);
+  const falloff=smooth01(600,1500,dist);
+  h*=falloff; dhdx*=falloff; dhdz*=falloff;
+  return [h,dhdx,dhdz];
+}
+
+function generateTerrainGrid(halfExtent,baseY,res){
+  const verts=[], idxArr=[];
+  for(let j=0;j<=res;j++){
+    for(let i=0;i<=res;i++){
+      const x=-halfExtent+(i/res)*halfExtent*2;
+      const z=-halfExtent+(j/res)*halfExtent*2;
+      const [h,dhdx,dhdz]=terrainHeight(x,z);
+      let nx=-dhdx,ny=1,nz=-dhdz;
+      const nl=Math.hypot(nx,ny,nz)||1; nx/=nl;ny/=nl;nz/=nl;
+      const u=(x+halfExtent)/(halfExtent*2), v=(z+halfExtent)/(halfExtent*2);
+      verts.push(x,baseY+h,z, nx,ny,nz, u,v);
+    }
+  }
+  const stride=res+1;
+  for(let j=0;j<res;j++){
+    for(let i=0;i<res;i++){
+      const a=j*stride+i,b=a+1,c=a+stride,d=c+1;
+      idxArr.push(a,c,b, b,c,d);
+    }
+  }
+  return {pos:new Float32Array(verts),idx:new Uint32Array(idxArr)};
+}
+
 const geometry=[];
 let totalTrisAll=0, drawnTrisLastFrame=0;
 function buildGeometry(){
   const groundArr=[], colliderArr=[];
   for(const item of MODEL){
-    const bytes=b64ToBytes(item.vertex_b64);
-    const ib=b64ToBytes(item.index_b64);
-    const pos=new Float32Array(bytes.buffer,bytes.byteOffset,bytes.byteLength>>2);
-    const idx=new Uint32Array(ib.buffer,ib.byteOffset,ib.byteLength>>2);
+    let bytes,ib,pos,idx;
+    if(item.name==="Plane_Material.001_0"){
+      const terrain=generateTerrainGrid(1742.32,-1.3,90);
+      pos=terrain.pos; idx=terrain.idx;
+      bytes=new Uint8Array(pos.buffer,pos.byteOffset,pos.byteLength);
+      ib=new Uint8Array(idx.buffer,idx.byteOffset,idx.byteLength);
+    } else {
+      bytes=b64ToBytes(item.vertex_b64);
+      ib=b64ToBytes(item.index_b64);
+      pos=new Float32Array(bytes.buffer,bytes.byteOffset,bytes.byteLength>>2);
+      idx=new Uint32Array(ib.buffer,ib.byteOffset,ib.byteLength>>2);
+    }
 
     // Bucket triangles into spatial cells by centroid, so each cell can be
     // drawn (or skipped) independently based on camera frustum.
