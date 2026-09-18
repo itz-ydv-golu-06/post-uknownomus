@@ -260,6 +260,194 @@ function aabbOutsideFrustum(box){
   return false;
 }
 
+/* ---- Sky objects: sun, moon, stars ----
+   Sun/moon are billboarded quads re-centered on the camera every frame along
+   the current sunDir (and its opposite, for the moon) at a fixed distance, so
+   they behave like infinitely-far sky objects. The sun's fragment shader
+   procedurally draws a bright core, a soft glow, and 6 thin rays radiating
+   out — no texture needed. Stars are a fixed field of gl.POINTS placed the
+   same way, faded in only at night via uGlobalAlpha. */
+const skyVs=`#version 300 es
+in vec2 aCorner;
+uniform mat4 uProjection,uView;
+uniform vec3 uCenter,uRight,uUp;
+uniform float uSize;
+out vec2 vUV;
+void main(){
+  vUV=aCorner;
+  vec3 worldPos=uCenter+uRight*aCorner.x*uSize+uUp*aCorner.y*uSize;
+  gl_Position=uProjection*uView*vec4(worldPos,1.0);
+}`;
+const skyFs=`#version 300 es
+precision highp float;
+in vec2 vUV;
+out vec4 outColor;
+uniform vec3 uColor;
+uniform float uAlpha;
+uniform float uRaySharpness;
+void main(){
+  float r=length(vUV);
+  if(r>1.0) discard;
+  float core=smoothstep(0.38,0.0,r);
+  float glow=pow(max(1.0-r,0.0),3.0);
+  float rays=0.0;
+  if(uRaySharpness>0.0){
+    float angle=atan(vUV.y,vUV.x);
+    rays=pow(abs(cos(angle*3.0)),uRaySharpness)*max(1.0-r,0.0)*0.9;
+  }
+  float intensity=core*1.4+glow*0.6+rays;
+  outColor=vec4(uColor*intensity,uAlpha*clamp(intensity,0.0,1.0));
+}`;
+const skyProgram=gl.createProgram();
+gl.attachShader(skyProgram,compile(gl.VERTEX_SHADER,skyVs));
+gl.attachShader(skyProgram,compile(gl.FRAGMENT_SHADER,skyFs));
+gl.linkProgram(skyProgram);
+if(!gl.getProgramParameter(skyProgram,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(skyProgram));
+const SKY_U={
+  projection:gl.getUniformLocation(skyProgram,"uProjection"),
+  view:gl.getUniformLocation(skyProgram,"uView"),
+  center:gl.getUniformLocation(skyProgram,"uCenter"),
+  right:gl.getUniformLocation(skyProgram,"uRight"),
+  up:gl.getUniformLocation(skyProgram,"uUp"),
+  size:gl.getUniformLocation(skyProgram,"uSize"),
+  color:gl.getUniformLocation(skyProgram,"uColor"),
+  alpha:gl.getUniformLocation(skyProgram,"uAlpha"),
+  raySharpness:gl.getUniformLocation(skyProgram,"uRaySharpness")
+};
+const skyQuadVAO=gl.createVertexArray();
+gl.bindVertexArray(skyQuadVAO);
+const skyQuadVBO=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,skyQuadVBO);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, 1,1, -1,-1, 1,1, -1,1]),gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+gl.bindVertexArray(null);
+
+const starVs=`#version 300 es
+in vec3 aDir;
+in float aBrightness;
+uniform mat4 uProjection,uView;
+uniform vec3 uEye;
+uniform float uDistance;
+out float vBrightness;
+void main(){
+  vec3 worldPos=uEye+aDir*uDistance;
+  gl_Position=uProjection*uView*vec4(worldPos,1.0);
+  gl_PointSize=1.5+aBrightness*2.5;
+  vBrightness=aBrightness;
+}`;
+const starFs=`#version 300 es
+precision highp float;
+in float vBrightness;
+out vec4 outColor;
+uniform float uGlobalAlpha;
+void main(){
+  vec2 c=gl_PointCoord*2.0-1.0;
+  float r=length(c);
+  if(r>1.0) discard;
+  float a=(1.0-r)*vBrightness*uGlobalAlpha;
+  outColor=vec4(vec3(1.0,1.0,0.96)*a,a);
+}`;
+const starProgram=gl.createProgram();
+gl.attachShader(starProgram,compile(gl.VERTEX_SHADER,starVs));
+gl.attachShader(starProgram,compile(gl.FRAGMENT_SHADER,starFs));
+gl.linkProgram(starProgram);
+if(!gl.getProgramParameter(starProgram,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(starProgram));
+const STAR_U={
+  projection:gl.getUniformLocation(starProgram,"uProjection"),
+  view:gl.getUniformLocation(starProgram,"uView"),
+  eye:gl.getUniformLocation(starProgram,"uEye"),
+  distance:gl.getUniformLocation(starProgram,"uDistance"),
+  globalAlpha:gl.getUniformLocation(starProgram,"uGlobalAlpha")
+};
+const STAR_COUNT=500;
+const starVAO=gl.createVertexArray();
+gl.bindVertexArray(starVAO);
+const starVBO=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,starVBO);
+{
+  const data=new Float32Array(STAR_COUNT*4);
+  for(let i=0;i<STAR_COUNT;i++){
+    const theta=Math.random()*Math.PI*2;
+    const phi=Math.PI*0.04+Math.random()*Math.PI*0.46; // upper hemisphere, avoid horizon glare
+    const dx=Math.cos(phi)*Math.cos(theta), dy=Math.sin(phi), dz=Math.cos(phi)*Math.sin(theta);
+    data[i*4]=dx; data[i*4+1]=dy; data[i*4+2]=dz;
+    data[i*4+3]=0.35+Math.random()*0.65;
+  }
+  gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);
+}
+gl.enableVertexAttribArray(0);
+gl.vertexAttribPointer(0,3,gl.FLOAT,false,16,0);
+gl.enableVertexAttribArray(1);
+gl.vertexAttribPointer(1,1,gl.FLOAT,false,16,12);
+gl.bindVertexArray(null);
+
+const SUN_SIZE=70, MOON_SIZE=55;
+
+function drawSky(eye,dir){
+  const SKY_DISTANCE=RENDER_DISTANCE*0.85;
+  const worldUp=[0,1,0];
+  let rx=worldUp[1]*dir[2]-worldUp[2]*dir[1];
+  let ry=worldUp[2]*dir[0]-worldUp[0]*dir[2];
+  let rz=worldUp[0]*dir[1]-worldUp[1]*dir[0];
+  const rl=Math.hypot(rx,ry,rz)||1; rx/=rl;ry/=rl;rz/=rl;
+  const ux=dir[1]*rz-dir[2]*ry, uy=dir[2]*rx-dir[0]*rz, uz=dir[0]*ry-dir[1]*rx;
+
+  const sLen=Math.hypot(sunDir[0],sunDir[1],sunDir[2])||1;
+  const sdx=sunDir[0]/sLen, sdy=sunDir[1]/sLen, sdz=sunDir[2]/sLen;
+  const sunPos=[eye[0]+sdx*SKY_DISTANCE,eye[1]+sdy*SKY_DISTANCE,eye[2]+sdz*SKY_DISTANCE];
+  const moonPos=[eye[0]-sdx*SKY_DISTANCE,eye[1]-sdy*SKY_DISTANCE,eye[2]-sdz*SKY_DISTANCE];
+
+  const elevation=sdy;
+  const dayFactor=smooth01(-0.12,0.12,elevation);
+  const horizonCloseness=1-Math.min(1,Math.abs(elevation)*3);
+  const sunAlpha=Math.min(1,dayFactor+horizonCloseness*0.6);
+  const nightFactor=1-dayFactor;
+  const moonAlpha=Math.min(1,nightFactor*1.3);
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA,gl.ONE);
+  gl.depthMask(false);
+  gl.useProgram(skyProgram);
+  gl.uniformMatrix4fv(SKY_U.projection,false,projection);
+  gl.uniformMatrix4fv(SKY_U.view,false,view);
+  gl.uniform3fv(SKY_U.right,[rx,ry,rz]);
+  gl.uniform3fv(SKY_U.up,[ux,uy,uz]);
+  gl.bindVertexArray(skyQuadVAO);
+
+  if(sunAlpha>0.01){
+    gl.uniform3fv(SKY_U.center,sunPos);
+    gl.uniform1f(SKY_U.size,SUN_SIZE);
+    gl.uniform3fv(SKY_U.color,[1.0,0.92,0.75]);
+    gl.uniform1f(SKY_U.alpha,sunAlpha);
+    gl.uniform1f(SKY_U.raySharpness,18.0);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+  }
+  if(moonAlpha>0.01){
+    gl.uniform3fv(SKY_U.center,moonPos);
+    gl.uniform1f(SKY_U.size,MOON_SIZE);
+    gl.uniform3fv(SKY_U.color,[0.82,0.86,0.98]);
+    gl.uniform1f(SKY_U.alpha,moonAlpha);
+    gl.uniform1f(SKY_U.raySharpness,0.0);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+  }
+
+  if(nightFactor>0.02){
+    gl.useProgram(starProgram);
+    gl.uniformMatrix4fv(STAR_U.projection,false,projection);
+    gl.uniformMatrix4fv(STAR_U.view,false,view);
+    gl.uniform3fv(STAR_U.eye,eye);
+    gl.uniform1f(STAR_U.distance,SKY_DISTANCE);
+    gl.uniform1f(STAR_U.globalAlpha,nightFactor);
+    gl.bindVertexArray(starVAO);
+    gl.drawArrays(gl.POINTS,0,STAR_COUNT);
+  }
+
+  gl.bindVertexArray(null);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+}
+
 const geometry=[];
 let totalTrisAll=0, drawnTrisLastFrame=0;
 function buildGeometry(){
@@ -497,6 +685,8 @@ function render(now){
     }
   }
   gl.bindVertexArray(null);
+
+  drawSky(eye,dir);
 
   if(showColliders){
     gl.useProgram(dbgProgram);
