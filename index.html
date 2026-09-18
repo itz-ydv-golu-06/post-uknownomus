@@ -8,12 +8,20 @@
 </head>
 <body>
 <canvas id="glcanvas"></canvas>
-<div id="info"><b>Position:</b> <span id="position">0, 0, 0</span><br><b>FPS:</b> <span id="fps">0</span></div>
+<div id="info"><b>Position:</b> <span id="position">0, 0, 0</span><br><b>FPS:</b> <span id="fps">0</span><br><b>Tris drawn:</b> <span id="tris">0</span></div>
 <div id="controls"><b>Controls</b><br>W/A/S/D or Arrows — Move<br>Mouse — Look (click to lock)<br>Space — Jump<br>Shift — Sprint<br>C — Toggle collider view<br>F — Toggle free cam (Space/Shift = up/down)<br>Esc — Release mouse</div>
 <div id="status">Loading model…</div>
 <div id="colliderhint" style="position:fixed;right:14px;top:56px;color:#fff;background:rgba(0,0,0,.58);padding:8px 11px;border-radius:10px;font-size:12px;display:none"></div>
 <div id="crosshair"></div>
 <div id="lockhint">Click to walk around</div>
+<div id="touchControls">
+  <div id="joystickBase"><div id="joystickKnob"></div></div>
+  <div id="lookZone"></div>
+  <div id="jumpBtnTouch">JUMP</div>
+  <div id="sprintBtnTouch">RUN</div>
+  <div id="colliderBtnTouch">C</div>
+  <div id="freecamBtnTouch">F</div>
+</div>
 <script src="data.js"></script>
 <script src="renderer.js"></script>
 <script src="collision.js"></script>
