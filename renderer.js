@@ -566,59 +566,7 @@ function buildGeometry(){
       idx=new Uint32Array(ib.buffer,ib.byteOffset,ib.byteLength>>2);
     }
 
-    // Bucket triangles into spatial cells by centroid, so each cell can be
-    // drawn (or skipped) independently based on camera frustum.
-    const cellMap=new Map(); // key -> {tris:[i0,i1,i2,...], minX,minY,minZ,maxX,maxY,maxZ}
-    for(let k=0;k<idx.length;k+=3){
-      const i0=idx[k],i1=idx[k+1],i2=idx[k+2];
-      const b0=i0*8,b1=i1*8,b2=i2*8;
-      const x0=pos[b0],y0=pos[b0+1],z0=pos[b0+2];
-      const x1=pos[b1],y1=pos[b1+1],z1=pos[b1+2];
-      const x2=pos[b2],y2=pos[b2+1],z2=pos[b2+2];
-      const cx=(x0+x1+x2)/3, cz=(z0+z1+z2)/3;
-      const key=Math.floor(cx/RENDER_CELL_SIZE)+","+Math.floor(cz/RENDER_CELL_SIZE);
-      let cell=cellMap.get(key);
-      if(!cell){
-        cell={tris:[],minX:Infinity,minY:Infinity,minZ:Infinity,maxX:-Infinity,maxY:-Infinity,maxZ:-Infinity};
-        cellMap.set(key,cell);
-      }
-      cell.tris.push(i0,i1,i2);
-      const minX=Math.min(x0,x1,x2),maxX=Math.max(x0,x1,x2);
-      const minY=Math.min(y0,y1,y2),maxY=Math.max(y0,y1,y2);
-      const minZ=Math.min(z0,z1,z2),maxZ=Math.max(z0,z1,z2);
-      if(minX<cell.minX)cell.minX=minX; if(maxX>cell.maxX)cell.maxX=maxX;
-      if(minY<cell.minY)cell.minY=minY; if(maxY>cell.maxY)cell.maxY=maxY;
-      if(minZ<cell.minZ)cell.minZ=minZ; if(maxZ>cell.maxZ)cell.maxZ=maxZ;
-    }
-
-    // Reorder the index buffer so each cell occupies a contiguous byte range.
-    const reordered=new Uint32Array(idx.length);
-    const cells=[];
-    let cursor=0;
-    for(const cell of cellMap.values()){
-      reordered.set(cell.tris,cursor);
-      cells.push({
-        offset:cursor*4, count:cell.tris.length,
-        minX:cell.minX,minY:cell.minY,minZ:cell.minZ,
-        maxX:cell.maxX,maxY:cell.maxY,maxZ:cell.maxZ
-      });
-      cursor+=cell.tris.length;
-    }
-    totalTrisAll+=idx.length/3;
-
-    const vao=gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const vb=gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER,vb);
-    gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);
-    const ibo=gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,reordered,gl.STATIC_DRAW);
-    const stride=8*4;
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,stride,0);
-    gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,stride,12);
-    gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,2,gl.FLOAT,false,stride,24);
-    geometry.push({vao,cells,material:item.material,name:item.name});
+    uploadMeshPart(item.name,item.material,pos,idx,bytes);
 
     // CPU-side copy of the same triangles for collision: Railing / BridgeSupport
     // become solid walls, everything else (road, lanes, crossing, bridge deck)
@@ -641,6 +589,73 @@ function buildGeometry(){
   wallLineVAO=wallLines.vao; wallLineCount=wallLines.count;
   const groundLines=buildDebugLines(groundTris);
   groundLineVAO=groundLines.vao; groundLineCount=groundLines.count;
+}
+
+/* Uploads one mesh part (position/normal/uv-interleaved `pos`, triangle `idx`)
+   to the GPU, bins its triangles into spatial cells for frustum/distance
+   culling, and appends it to the `geometry` array the render loop already
+   draws from. Used both by the main city load above and by the optional dev
+   house-importer (dev-editor.js), so an imported house is drawn, culled, and
+   positionable through the exact same path as every other part in the game.
+   `bytes` is the raw ArrayBufferView backing `pos` (for the GPU upload) —
+   pass pos.buffer-derived bytes if you don't already have one. Returns the
+   pushed geometry entry. */
+function uploadMeshPart(name,materialIndex,pos,idx,bytes){
+  if(!bytes) bytes=new Uint8Array(pos.buffer,pos.byteOffset,pos.byteLength);
+  const cellMap=new Map();
+  for(let k=0;k<idx.length;k+=3){
+    const i0=idx[k],i1=idx[k+1],i2=idx[k+2];
+    const b0=i0*8,b1=i1*8,b2=i2*8;
+    const x0=pos[b0],y0=pos[b0+1],z0=pos[b0+2];
+    const x1=pos[b1],y1=pos[b1+1],z1=pos[b1+2];
+    const x2=pos[b2],y2=pos[b2+1],z2=pos[b2+2];
+    const cx=(x0+x1+x2)/3, cz=(z0+z1+z2)/3;
+    const key=Math.floor(cx/RENDER_CELL_SIZE)+","+Math.floor(cz/RENDER_CELL_SIZE);
+    let cell=cellMap.get(key);
+    if(!cell){
+      cell={tris:[],minX:Infinity,minY:Infinity,minZ:Infinity,maxX:-Infinity,maxY:-Infinity,maxZ:-Infinity};
+      cellMap.set(key,cell);
+    }
+    cell.tris.push(i0,i1,i2);
+    const minX=Math.min(x0,x1,x2),maxX=Math.max(x0,x1,x2);
+    const minY=Math.min(y0,y1,y2),maxY=Math.max(y0,y1,y2);
+    const minZ=Math.min(z0,z1,z2),maxZ=Math.max(z0,z1,z2);
+    if(minX<cell.minX)cell.minX=minX; if(maxX>cell.maxX)cell.maxX=maxX;
+    if(minY<cell.minY)cell.minY=minY; if(maxY>cell.maxY)cell.maxY=maxY;
+    if(minZ<cell.minZ)cell.minZ=minZ; if(maxZ>cell.maxZ)cell.maxZ=maxZ;
+  }
+
+  const reordered=new Uint32Array(idx.length);
+  const cells=[];
+  let cursor=0;
+  for(const cell of cellMap.values()){
+    reordered.set(cell.tris,cursor);
+    cells.push({
+      offset:cursor*4, count:cell.tris.length,
+      minX:cell.minX,minY:cell.minY,minZ:cell.minZ,
+      maxX:cell.maxX,maxY:cell.maxY,maxZ:cell.maxZ
+    });
+    cursor+=cell.tris.length;
+  }
+  totalTrisAll+=idx.length/3;
+
+  const vao=gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const vb=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,vb);
+  gl.bufferData(gl.ARRAY_BUFFER,bytes,gl.STATIC_DRAW);
+  const ibo=gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibo);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,reordered,gl.STATIC_DRAW);
+  const stride=8*4;
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,stride,0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.FLOAT,false,stride,12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,2,gl.FLOAT,false,stride,24);
+  gl.bindVertexArray(null);
+
+  const part={vao,cells,material:materialIndex,name};
+  geometry.push(part);
+  return part;
 }
 
 let projection=new Float32Array(16),view=new Float32Array(16),modelMat=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
