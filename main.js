@@ -1,3 +1,6 @@
 "use strict";
 
-start().then(loadHouseManifest);
+start().then(()=>{
+  buildStarterHouse(120,1420); // near spawn — reposition later via the dev tool (IAMDEV) if needed
+  return loadHouseManifest();
+});

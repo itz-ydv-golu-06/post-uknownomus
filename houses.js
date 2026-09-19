@@ -330,3 +330,82 @@ async function loadHouseManifest(){
     }
   }
 }
+
+/* ---------------- Starter placeholder house ----------------
+   A simple procedural low-poly house — box walls, a pyramid roof, a door,
+   two windows — built directly in code instead of importing a .glb. Placed
+   automatically at every startup, near the player's spawn point, using
+   raycastGroundHeight() so it actually sits on the ground rather than
+   floating/sinking. It's just another `geometry` entry like everything
+   else, so it shows up in the dev road-position-editor's dropdown too if
+   you want to nudge or later replace it with a real imported model. */
+function pushQuad(posArr,idxArr,p0,p1,p2,p3,n){
+  const base=posArr.length/8;
+  for(const p of [p0,p1,p2,p3]) posArr.push(p[0],p[1],p[2], n[0],n[1],n[2], 0,0);
+  idxArr.push(base,base+1,base+2, base,base+2,base+3);
+}
+function pushTri(posArr,idxArr,p0,p1,p2){
+  const ax=p1[0]-p0[0],ay=p1[1]-p0[1],az=p1[2]-p0[2];
+  const bx=p2[0]-p0[0],by=p2[1]-p0[1],bz=p2[2]-p0[2];
+  let nx=ay*bz-az*by, ny=az*bx-ax*bz, nz=ax*by-ay*bx;
+  const l=Math.hypot(nx,ny,nz)||1; nx/=l;ny/=l;nz/=l;
+  const base=posArr.length/8;
+  for(const p of [p0,p1,p2]) posArr.push(p[0],p[1],p[2], nx,ny,nz, 0,0);
+  idxArr.push(base,base+1,base+2);
+}
+function addHouseMaterial(name,color,roughness,metallic){
+  const idx=MATERIALS.length;
+  MATERIALS.push({name,baseColorTexture:null,metallicRoughnessTexture:null,occlusionTexture:null,
+    emissiveTexture:null,baseColorFactor:color,metallicFactor:metallic,roughnessFactor:roughness,
+    emissiveFactor:[0,0,0],alphaMode:"OPAQUE",alphaCutoff:0.5,doubleSided:true,
+    uvScale:[1,1],uvOffset:[0,0],uvRotation:0});
+  return idx;
+}
+
+function buildStarterHouse(cx,cz){
+  const groundY=(typeof raycastGroundHeight==="function")?raycastGroundHeight(cx,cz,1e9):0;
+  const baseY=groundY!==null?groundY:0;
+
+  const hw=12, hd=9, wallH=16;            // half-width, half-depth, wall height
+  const overhang=3, apexRise=10;          // roof eaves overhang, apex height above wall top
+
+  // --- Walls (one material/part) ---
+  const wallPos=[], wallIdx=[];
+  pushQuad(wallPos,wallIdx,[-hw,0,-hd],[hw,0,-hd],[hw,wallH,-hd],[-hw,wallH,-hd],[0,0,-1]); // front
+  pushQuad(wallPos,wallIdx,[hw,0,hd],[-hw,0,hd],[-hw,wallH,hd],[hw,wallH,hd],[0,0,1]);      // back
+  pushQuad(wallPos,wallIdx,[-hw,0,hd],[-hw,0,-hd],[-hw,wallH,-hd],[-hw,wallH,hd],[-1,0,0]); // left
+  pushQuad(wallPos,wallIdx,[hw,0,-hd],[hw,0,hd],[hw,wallH,hd],[hw,wallH,-hd],[1,0,0]);      // right
+  pushQuad(wallPos,wallIdx,[-hw,wallH,-hd],[hw,wallH,-hd],[hw,wallH,hd],[-hw,wallH,hd],[0,1,0]); // top cap (under roof, cheap insurance)
+
+  // --- Roof (pyramid, 4 triangles) ---
+  const roofPos=[], roofIdx=[];
+  const rw=hw+overhang, rd=hd+overhang, apex=[0,wallH+apexRise,0];
+  pushTri(roofPos,roofIdx,[-rw,wallH,-rd],apex,[rw,wallH,-rd]);
+  pushTri(roofPos,roofIdx,[rw,wallH,-rd],apex,[rw,wallH,rd]);
+  pushTri(roofPos,roofIdx,[rw,wallH,rd],apex,[-rw,wallH,rd]);
+  pushTri(roofPos,roofIdx,[-rw,wallH,rd],apex,[-rw,wallH,-rd]);
+
+  // --- Door (front wall) ---
+  const doorPos=[], doorIdx=[];
+  pushQuad(doorPos,doorIdx,[-2,0,-hd-0.05],[2,0,-hd-0.05],[2,8,-hd-0.05],[-2,8,-hd-0.05],[0,0,-1]);
+
+  // --- Windows (front wall, either side of the door) ---
+  const winPos=[], winIdx=[];
+  pushQuad(winPos,winIdx,[-8,9,-hd-0.05],[-5,9,-hd-0.05],[-5,12,-hd-0.05],[-8,12,-hd-0.05],[0,0,-1]);
+  pushQuad(winPos,winIdx,[5,9,-hd-0.05],[8,9,-hd-0.05],[8,12,-hd-0.05],[5,12,-hd-0.05],[0,0,-1]);
+
+  const wallMat=addHouseMaterial("StarterHouseWalls",[0.87,0.78,0.62,1],0.9,0);
+  const roofMat=addHouseMaterial("StarterHouseRoof",[0.55,0.18,0.14,1],0.8,0);
+  const doorMat=addHouseMaterial("StarterHouseDoor",[0.32,0.19,0.10,1],0.9,0);
+  const winMat=addHouseMaterial("StarterHouseWindow",[0.55,0.75,0.85,1],0.2,0.1);
+
+  const parts=[
+    uploadMeshPart("StarterHouse_walls",wallMat,new Float32Array(wallPos),Uint32Array.from(wallIdx)),
+    uploadMeshPart("StarterHouse_roof",roofMat,new Float32Array(roofPos),Uint32Array.from(roofIdx)),
+    uploadMeshPart("StarterHouse_door",doorMat,new Float32Array(doorPos),Uint32Array.from(doorIdx)),
+    uploadMeshPart("StarterHouse_windows",winMat,new Float32Array(winPos),Uint32Array.from(winIdx)),
+  ];
+  parts.forEach(p=>{ p.offset={x:cx,y:baseY,z:cz}; });
+  console.log(`[houses] starter house placed at (${cx.toFixed(0)}, ${baseY.toFixed(1)}, ${cz.toFixed(0)})`);
+  return parts;
+}
