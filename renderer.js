@@ -496,22 +496,29 @@ function roadProximity(x,z){
   return (MAX_RING+1)*ROAD_MASK_CELL;
 }
 
+// Adjustable at runtime by the optional dev terrain editor (dev-editor.js).
+// Defaults below exactly match the original hardcoded values, so this is a
+// no-op unless something has actually changed these.
+let TERRAIN_AMP_SCALE=1, TERRAIN_FREQ_SCALE=1, TERRAIN_MASK_NEAR=260, TERRAIN_MASK_FAR=620;
+
 function terrainHeight(x,z){
-  const s1x=x*0.0012,s1z=z*0.0011, s2x=x*0.0035,s2z=z*0.0031, s3x=x*0.008,s3z=z*0.009;
-  const a1=55,a2=22,a3=9;
+  const fx=TERRAIN_FREQ_SCALE, amp=TERRAIN_AMP_SCALE;
+  const f1=0.0012*fx,f1z=0.0011*fx, f2=0.0035*fx,f2z=0.0031*fx, f3=0.008*fx,f3z=0.009*fx;
+  const s1x=x*f1,s1z=z*f1z, s2x=x*f2,s2z=z*f2z, s3x=x*f3,s3z=z*f3z;
+  const a1=55*amp,a2=22*amp,a3=9*amp;
   let h=a1*Math.sin(s1x+1.3)*Math.cos(s1z-0.7)
        +a2*Math.sin(s2x-2.1)*Math.cos(s2z+1.9)
        +a3*Math.sin(s3x+0.4)*Math.sin(s3z-1.1);
-  let dhdx=a1*0.0012*Math.cos(s1x+1.3)*Math.cos(s1z-0.7)
-           +a2*0.0035*Math.cos(s2x-2.1)*Math.cos(s2z+1.9)
-           +a3*0.008*Math.cos(s3x+0.4)*Math.sin(s3z-1.1);
-  let dhdz=-a1*0.0011*Math.sin(s1x+1.3)*Math.sin(s1z-0.7)
-           -a2*0.0031*Math.sin(s2x-2.1)*Math.sin(s2z+1.9)
-           +a3*0.009*Math.sin(s3x+0.4)*Math.cos(s3z-1.1);
+  let dhdx=a1*f1*Math.cos(s1x+1.3)*Math.cos(s1z-0.7)
+           +a2*f2*Math.cos(s2x-2.1)*Math.cos(s2z+1.9)
+           +a3*f3*Math.cos(s3x+0.4)*Math.sin(s3z-1.1);
+  let dhdz=-a1*f1z*Math.sin(s1x+1.3)*Math.sin(s1z-0.7)
+           -a2*f2z*Math.sin(s2x-2.1)*Math.sin(s2z+1.9)
+           +a3*f3z*Math.sin(s3x+0.4)*Math.cos(s3z-1.1);
   // Fade hills to flat near actual road geometry, ramp to full height in
   // genuinely open gaps between roads.
   const dist=roadMaskCells?roadProximity(x,z):999;
-  const falloff=smooth01(260,620,dist);
+  const falloff=smooth01(TERRAIN_MASK_NEAR,TERRAIN_MASK_FAR,dist);
   h*=falloff; dhdx*=falloff; dhdz*=falloff;
   return [h,dhdx,dhdz];
 }
@@ -542,6 +549,7 @@ function generateTerrainGrid(halfExtent,baseY,res){
 const geometry=[];
 let totalTrisAll=0, drawnTrisLastFrame=0;
 function buildGeometry(){
+  totalTrisAll=0;
   buildRoadMask();
   const groundArr=[], colliderArr=[];
   for(const item of MODEL){

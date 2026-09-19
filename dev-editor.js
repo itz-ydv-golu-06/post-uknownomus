@@ -1,24 +1,35 @@
 "use strict";
 
 /* ================================================================
-   DEV ROAD EDITOR — a standalone, removable debug tool.
+   DEV TOOLS — a standalone, removable debug/level-design toolkit.
 
    To fully strip this out of the game later: delete this file and
    remove its <script src="dev-editor.js"> line from index.html.
-   Nothing else depends on it. The only thing it relies on is the
-   per-part `.offset` support in renderer.js's draw loop — and that
-   hook is completely inert on its own: parts simply have no
-   `.offset` property until this file sets one, so removing this
-   file returns everything to exactly how it behaved before it
-   existed. No other file needs to change.
+   Nothing else depends on it:
+     - renderer.js's per-part `.offset` support is inert until this
+       file sets one.
+     - renderer.js's TERRAIN_AMP_SCALE / TERRAIN_FREQ_SCALE /
+       TERRAIN_MASK_NEAR / TERRAIN_MASK_FAR globals default to
+       exactly the original hardcoded terrain values, unchanged
+       unless this file's terrain panel edits them.
+     - The name labels and everything else here run their own
+       requestAnimationFrame loop and touch no other file.
+   Removing this file returns the game to exactly how it behaved
+   before dev tools existed. No other file needs to change.
 
    Activate in-game by typing IAMDEV, like a classic cheat code.
    Type it again to toggle the panel closed/open once unlocked.
 
-   Note: this only repositions the VISUAL mesh. Collision (ground
-   height + wall pushback) is built once from the original geometry
-   and does not follow a part you've moved — treat this as a layout
-   preview tool, not a physics-accurate one.
+   Free cam (F) and the collider viewer (C) already work normally
+   at any time — they aren't gated by dev mode, so there's nothing
+   special to do to use them alongside these tools.
+
+   Note: the road position editor only repositions the VISUAL mesh.
+   Collision is built once from the original geometry and does not
+   follow a part you've moved. The terrain "Regenerate" button DOES
+   rebuild collision too (it reruns the same buildGeometry() the
+   game uses at startup), so terrain edits stay physically accurate
+   — that button just costs a brief hitch while it rebuilds.
    ================================================================ */
 (function(){
   const CHEAT="IAMDEV";
@@ -27,6 +38,7 @@
   let panel=null;
   let selectedIndex=0;
   let step=5;
+  let labelEls=[];
 
   function inPanelInput(){
     return panel && document.activeElement && panel.contains(document.activeElement);
@@ -37,26 +49,26 @@
       typedBuffer=(typedBuffer+e.key).toUpperCase().slice(-CHEAT.length);
       if(typedBuffer===CHEAT){
         typedBuffer="";
-        if(!devActive){ devActive=true; buildPanel(); }
+        if(!devActive){ devActive=true; buildPanel(); startLabelLoop(); }
         else { panel.style.display=(panel.style.display==="none")?"block":"none"; }
       }
     }
     if(!devActive || !panel) return;
 
     if(inPanelInput()){
-      // Typing/clicking inside our own panel — never let it leak into player movement.
       if(typeof keys!=="undefined") keys[e.code]=false;
       return;
     }
 
     const nudgeKeys=["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","PageUp","PageDown"];
     if(nudgeKeys.includes(e.code)){
-      if(typeof keys!=="undefined") keys[e.code]=false; // cancel player.js's movement flag
+      if(typeof keys!=="undefined") keys[e.code]=false;
       e.preventDefault();
       nudgeSelected(e.code);
     }
   });
 
+  /* ---------------- Road position editor ---------------- */
   function currentPart(){
     if(typeof geometry==="undefined"||!geometry.length) return null;
     return geometry[selectedIndex];
@@ -75,9 +87,9 @@
     if(code==="ArrowDown") off.z+=step;
     if(code==="PageUp") off.y+=step;
     if(code==="PageDown") off.y-=step;
-    syncInputs();
+    syncPositionInputs();
   }
-  function syncInputs(){
+  function syncPositionInputs(){
     if(!panel) return;
     const part=currentPart();
     const off=(part&&part.offset)?part.offset:{x:0,y:0,z:0};
@@ -85,7 +97,7 @@
     panel.querySelector("#devY").value=off.y.toFixed(1);
     panel.querySelector("#devZ").value=off.z.toFixed(1);
   }
-  function applyInputs(){
+  function applyPositionInputs(){
     const part=currentPart();
     if(!part) return;
     const off=ensureOffset(part);
@@ -94,29 +106,131 @@
     off.z=parseFloat(panel.querySelector("#devZ").value)||0;
   }
 
+  /* ---------------- Terrain editor ---------------- */
+  function syncTerrainInputs(){
+    if(!panel||typeof TERRAIN_AMP_SCALE==="undefined") return;
+    panel.querySelector("#devAmp").value=TERRAIN_AMP_SCALE;
+    panel.querySelector("#devAmpVal").textContent=TERRAIN_AMP_SCALE.toFixed(2);
+    panel.querySelector("#devFreq").value=TERRAIN_FREQ_SCALE;
+    panel.querySelector("#devFreqVal").textContent=TERRAIN_FREQ_SCALE.toFixed(2);
+    panel.querySelector("#devMaskNear").value=TERRAIN_MASK_NEAR;
+    panel.querySelector("#devMaskFar").value=TERRAIN_MASK_FAR;
+  }
+  function applyTerrainSlidersLive(){
+    // Sliders only affect NEW geometry, so this just previews the numbers;
+    // the actual mesh only updates on Regenerate (below).
+    TERRAIN_AMP_SCALE=parseFloat(panel.querySelector("#devAmp").value);
+    panel.querySelector("#devAmpVal").textContent=TERRAIN_AMP_SCALE.toFixed(2);
+    TERRAIN_FREQ_SCALE=parseFloat(panel.querySelector("#devFreq").value);
+    panel.querySelector("#devFreqVal").textContent=TERRAIN_FREQ_SCALE.toFixed(2);
+  }
+  function regenerateWorld(){
+    TERRAIN_MASK_NEAR=parseFloat(panel.querySelector("#devMaskNear").value)||0;
+    TERRAIN_MASK_FAR=Math.max(TERRAIN_MASK_NEAR+50,parseFloat(panel.querySelector("#devMaskFar").value)||0);
+    const savedOffsets=geometry.map(p=>p.offset||null);
+    geometry.length=0;
+    buildGeometry();
+    geometry.forEach((p,i)=>{ if(savedOffsets[i]) p.offset=savedOffsets[i]; });
+    rebuildLabels();
+    console.log("[dev-editor] world regenerated with amp="+TERRAIN_AMP_SCALE+" freq="+TERRAIN_FREQ_SCALE+
+                " maskNear="+TERRAIN_MASK_NEAR+" maskFar="+TERRAIN_MASK_FAR);
+  }
+
+  /* ---------------- Live name labels over each part ---------------- */
+  function centroidOf(part){
+    if(!part.cells||!part.cells.length) return [0,0,0];
+    let sx=0,sy=0,sz=0;
+    for(const c of part.cells){ sx+=(c.minX+c.maxX)/2; sy+=(c.minY+c.maxY)/2; sz+=(c.minZ+c.maxZ)/2; }
+    const n=part.cells.length;
+    return [sx/n, sy/n+60, sz/n];
+  }
+  function projectToScreen(pos,projMat,viewMat){
+    const vx=viewMat[0]*pos[0]+viewMat[4]*pos[1]+viewMat[8]*pos[2]+viewMat[12];
+    const vy=viewMat[1]*pos[0]+viewMat[5]*pos[1]+viewMat[9]*pos[2]+viewMat[13];
+    const vz=viewMat[2]*pos[0]+viewMat[6]*pos[1]+viewMat[10]*pos[2]+viewMat[14];
+    const vw=viewMat[3]*pos[0]+viewMat[7]*pos[1]+viewMat[11]*pos[2]+viewMat[15];
+    const cx=projMat[0]*vx+projMat[4]*vy+projMat[8]*vz+projMat[12]*vw;
+    const cy=projMat[1]*vx+projMat[5]*vy+projMat[9]*vz+projMat[13]*vw;
+    const cw=projMat[3]*vx+projMat[7]*vy+projMat[11]*vz+projMat[15]*vw;
+    if(cw<=0.05) return null;
+    const ndcX=cx/cw, ndcY=cy/cw;
+    if(ndcX<-1.3||ndcX>1.3||ndcY<-1.3||ndcY>1.3) return null;
+    return [(ndcX*0.5+0.5)*innerWidth, (1-(ndcY*0.5+0.5))*innerHeight];
+  }
+  function rebuildLabels(){
+    labelEls.forEach(el=>el.remove());
+    labelEls=(typeof geometry!=="undefined"?geometry:[]).map((p,i)=>{
+      const el=document.createElement("div");
+      el.className="devLabel";
+      el.textContent=`${i}: ${p.name}`;
+      el.style.display="none";
+      document.body.appendChild(el);
+      return el;
+    });
+  }
+  let labelLoopStarted=false;
+  function startLabelLoop(){
+    if(labelLoopStarted) return;
+    labelLoopStarted=true;
+    rebuildLabels();
+    function frame(){
+      if(!devActive || typeof projection==="undefined" || typeof view==="undefined"){
+        labelEls.forEach(el=>el.style.display="none");
+        requestAnimationFrame(frame);
+        return;
+      }
+      const useFree=(typeof freeCam!=="undefined"&&freeCam);
+      const eye=useFree?[freeCamPos.x,freeCamPos.y,freeCamPos.z]:[player.x,player.y,player.z];
+      geometry.forEach((part,i)=>{
+        const el=labelEls[i];
+        if(!el) return;
+        let [cx,cy,cz]=centroidOf(part);
+        if(part.offset){ cx+=part.offset.x; cy+=part.offset.y; cz+=part.offset.z; }
+        const dx=cx-eye[0], dz=cz-eye[2];
+        if(dx*dx+dz*dz>900*900){ el.style.display="none"; return; }
+        const p=projectToScreen([cx,cy,cz],projection,view);
+        if(!p){ el.style.display="none"; return; }
+        el.style.display="block";
+        el.style.left=p[0]+"px";
+        el.style.top=p[1]+"px";
+        el.style.outline=(i===selectedIndex)?"2px solid #ffd25e":"none";
+      });
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* ---------------- Panel UI ---------------- */
   function buildPanel(){
     const style=document.createElement("style");
     style.textContent=`
-      #devEditorPanel{position:fixed;left:14px;top:130px;z-index:100;width:280px;
+      #devEditorPanel{position:fixed;left:14px;top:130px;z-index:100;width:290px;max-height:80vh;overflow-y:auto;
         background:rgba(10,12,14,.92);color:#fff;border:1px solid rgba(255,255,255,.25);
         border-radius:12px;padding:14px;font-family:system-ui,sans-serif;font-size:12px;
         box-shadow:0 8px 24px rgba(0,0,0,.5)}
-      #devEditorPanel h3{margin:0 0 8px;font-size:13px;color:#ffd25e}
-      #devEditorPanel select,#devEditorPanel input,#devEditorPanel button{
+      #devEditorPanel h3{margin:14px 0 8px;font-size:13px;color:#ffd25e}
+      #devEditorPanel h3:first-child{margin-top:0}
+      #devEditorPanel select,#devEditorPanel input[type=number],#devEditorPanel button{
         width:100%;box-sizing:border-box;margin:4px 0;padding:6px;border-radius:6px;
         border:1px solid rgba(255,255,255,.25);background:#1a1d22;color:#fff;font-size:12px}
+      #devEditorPanel input[type=range]{width:100%;margin:4px 0}
       #devEditorPanel .row{display:flex;gap:6px}
       #devEditorPanel .row input{flex:1;min-width:0}
+      #devEditorPanel .sliderRow{display:flex;justify-content:space-between;font-size:11px;opacity:.85}
       #devEditorPanel button{cursor:pointer;background:#2a7dff;border:none;font-weight:700}
       #devEditorPanel button.secondary{background:#333}
+      #devEditorPanel hr{border:none;border-top:1px solid rgba(255,255,255,.15);margin:10px 0}
       #devEditorPanel .hint{opacity:.7;margin-top:6px;line-height:1.5}
+      .devLabel{position:fixed;z-index:60;pointer-events:none;color:#ffe27a;font:700 11px/1.2 system-ui,sans-serif;
+        background:rgba(0,0,0,.55);padding:2px 6px;border-radius:5px;white-space:nowrap;
+        transform:translate(-50%,-100%);text-shadow:0 1px 2px rgba(0,0,0,.8)}
     `;
     document.head.appendChild(style);
 
     panel=document.createElement("div");
     panel.id="devEditorPanel";
     panel.innerHTML=`
-      <h3>DEV ROAD EDITOR</h3>
+      <h3>ROAD POSITION EDITOR</h3>
       <select id="devPartSelect"></select>
       <div class="row">
         <input id="devX" type="number" step="1" placeholder="X">
@@ -132,7 +246,23 @@
       <button id="devResetPart" class="secondary">Reset this part</button>
       <button id="devResetAll" class="secondary">Reset ALL parts</button>
       <button id="devCopyJson">Copy offsets as JSON</button>
-      <div class="hint">Arrow keys: move X/Z &middot; PageUp/PageDown: move Y &middot; WASD still walks normally &middot; type IAMDEV again to hide panel</div>
+      <div class="hint">Arrow keys: move X/Z &middot; PageUp/PageDown: move Y &middot; WASD still walks normally</div>
+
+      <hr>
+      <h3>TERRAIN EDITOR</h3>
+      <div class="sliderRow"><span>Hill amplitude</span><span id="devAmpVal">1.00</span></div>
+      <input id="devAmp" type="range" min="0" max="3" step="0.05" value="1">
+      <div class="sliderRow"><span>Hill frequency</span><span id="devFreqVal">1.00</span></div>
+      <input id="devFreq" type="range" min="0.3" max="3" step="0.05" value="1">
+      <div class="row">
+        <input id="devMaskNear" type="number" step="10" placeholder="Flat radius">
+        <input id="devMaskFar" type="number" step="10" placeholder="Full-hill radius">
+      </div>
+      <button id="devRegenerate">Regenerate terrain &amp; collision</button>
+      <div class="hint">Sliders preview the numbers instantly; click Regenerate to rebuild the actual mesh + collision with these values. This one has a brief hitch — it rebuilds the whole scene.</div>
+
+      <hr>
+      <div class="hint">Free cam (F) and collider view (C) work as normal right now — nothing special needed. Name labels above show live in the world while this panel is open. Type IAMDEV again to hide this panel.</div>
     `;
     document.body.appendChild(panel);
 
@@ -142,19 +272,19 @@
       opt.value=i; opt.textContent=`${i}: ${p.name}`;
       select.appendChild(opt);
     });
-    select.addEventListener("change",()=>{selectedIndex=parseInt(select.value,10);syncInputs();});
+    select.addEventListener("change",()=>{selectedIndex=parseInt(select.value,10);syncPositionInputs();});
     panel.querySelector("#devStep").addEventListener("change",e=>{step=parseFloat(e.target.value);});
     ["devX","devY","devZ"].forEach(id=>{
-      panel.querySelector("#"+id).addEventListener("change",applyInputs);
+      panel.querySelector("#"+id).addEventListener("change",applyPositionInputs);
     });
     panel.querySelector("#devResetPart").addEventListener("click",()=>{
       const part=currentPart();
       if(part) part.offset={x:0,y:0,z:0};
-      syncInputs();
+      syncPositionInputs();
     });
     panel.querySelector("#devResetAll").addEventListener("click",()=>{
       (typeof geometry!=="undefined"?geometry:[]).forEach(p=>{p.offset={x:0,y:0,z:0};});
-      syncInputs();
+      syncPositionInputs();
     });
     panel.querySelector("#devCopyJson").addEventListener("click",()=>{
       const out={};
@@ -167,7 +297,12 @@
       alert("Offsets copied to clipboard (also logged to console) so you can save them before removing this file.");
     });
 
-    syncInputs();
-    console.log("[dev-editor] DEV MODE ACTIVE — panel opened. Select a part, then use the arrow keys / PageUp / PageDown to nudge it, or type exact numbers.");
+    panel.querySelector("#devAmp").addEventListener("input",applyTerrainSlidersLive);
+    panel.querySelector("#devFreq").addEventListener("input",applyTerrainSlidersLive);
+    panel.querySelector("#devRegenerate").addEventListener("click",regenerateWorld);
+
+    syncPositionInputs();
+    syncTerrainInputs();
+    console.log("[dev-editor] DEV MODE ACTIVE — panel opened.");
   }
 })();
