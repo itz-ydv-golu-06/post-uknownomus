@@ -12,10 +12,16 @@
        TERRAIN_MASK_NEAR / TERRAIN_MASK_FAR globals default to
        exactly the original hardcoded terrain values, unchanged
        unless this file's terrain panel edits them.
+     - houses.js (NOT removable — see that file) does the actual
+       GLB parsing and the permanent auto-load of houses.json at
+       every startup. This file just calls into it for interactive
+       import/placement and writes the manifest via "Save Layout".
      - The name labels and everything else here run their own
        requestAnimationFrame loop and touch no other file.
    Removing this file returns the game to exactly how it behaved
-   before dev tools existed. No other file needs to change.
+   before dev tools existed — any houses you've already saved to
+   houses.json will keep loading normally, since that's houses.js's
+   job, not this file's.
 
    Activate in-game by typing IAMDEV, like a classic cheat code.
    Type it again to toggle the panel closed/open once unlocked.
@@ -39,6 +45,7 @@
   let selectedIndex=0;
   let step=5;
   let labelEls=[];
+  let placedHouses=[]; // [{fileName, partIndices:[geomIdx,...]}] — used by Save Layout below
 
   function inPanelInput(){
     return panel && document.activeElement && panel.contains(document.activeElement);
@@ -200,217 +207,6 @@
     requestAnimationFrame(frame);
   }
 
-  /* ---------------- House importer (.glb) ----------------
-     A real (if focused) glTF-Binary parser: reads the JSON + BIN chunks,
-     walks the node hierarchy applying each node's transform, converts each
-     mesh primitive into the game's own pos/idx vertex format, and pushes any
-     materials/textures onto the SAME global MATERIALS/textures arrays the
-     city uses — so an imported house renders through the exact same shader,
-     gets the same frustum/distance culling, and shows up in the position
-     editor's dropdown above like any other part. Supports POSITION/NORMAL/
-     TEXCOORD_0, triangle indices (ubyte/ushort/uint), TRS or matrix nodes,
-     and pbrMetallicRoughness materials with embedded (bufferView) textures.
-     Not supported: skinning, animation, morph targets, external (URI) images
-     or buffers — a self-contained single .glb file is expected. */
-  const COMPONENT_TYPES={5120:Int8Array,5121:Uint8Array,5122:Int16Array,5123:Uint16Array,5125:Uint32Array,5126:Float32Array};
-  const TYPE_COMPONENTS={SCALAR:1,VEC2:2,VEC3:3,VEC4:4,MAT2:4,MAT3:9,MAT4:16};
-
-  function parseGLB(buf){
-    const dv=new DataView(buf);
-    if(dv.getUint32(0,true)!==0x46546C67) throw new Error("Not a .glb file (bad magic)");
-    const totalLength=dv.getUint32(8,true);
-    let offset=12, json=null, bin=null;
-    while(offset<totalLength){
-      const chunkLength=dv.getUint32(offset,true);
-      const chunkType=dv.getUint32(offset+4,true);
-      const chunkStart=offset+8;
-      if(chunkType===0x4E4F534A){ // "JSON"
-        json=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,chunkStart,chunkLength)));
-      } else if(chunkType===0x004E4942){ // "BIN\0"
-        bin=buf.slice(chunkStart,chunkStart+chunkLength);
-      }
-      offset=chunkStart+chunkLength;
-    }
-    if(!json) throw new Error("No JSON chunk found in .glb");
-    return {json,bin};
-  }
-
-  function readAccessor(json,bin,accessorIndex){
-    const acc=json.accessors[accessorIndex];
-    const bv=json.bufferViews[acc.bufferView];
-    const Ctor=COMPONENT_TYPES[acc.componentType];
-    const numComp=TYPE_COMPONENTS[acc.type];
-    const elemBytes=Ctor.BYTES_PER_ELEMENT*numComp;
-    const byteOffset=(bv.byteOffset||0)+(acc.byteOffset||0);
-    const out=new Float32Array(acc.count*numComp);
-    if(!bv.byteStride||bv.byteStride===elemBytes){
-      const src=new Ctor(bin,byteOffset,acc.count*numComp);
-      for(let i=0;i<src.length;i++) out[i]=src[i];
-    } else {
-      for(let i=0;i<acc.count;i++){
-        const elem=new Ctor(bin,byteOffset+i*bv.byteStride,numComp);
-        for(let c=0;c<numComp;c++) out[i*numComp+c]=elem[c];
-      }
-    }
-    return out;
-  }
-  function readIndices(json,bin,accessorIndex){
-    const acc=json.accessors[accessorIndex];
-    const bv=json.bufferViews[acc.bufferView];
-    const Ctor=COMPONENT_TYPES[acc.componentType];
-    const byteOffset=(bv.byteOffset||0)+(acc.byteOffset||0);
-    const src=new Ctor(bin,byteOffset,acc.count);
-    return Uint32Array.from(src);
-  }
-
-  function quatToMat4(q){
-    const [x,y,z,w]=q;
-    return [
-      1-2*(y*y+z*z), 2*(x*y+z*w),   2*(x*z-y*w),   0,
-      2*(x*y-z*w),   1-2*(x*x+z*z), 2*(y*z+x*w),   0,
-      2*(x*z+y*w),   2*(y*z-x*w),   1-2*(x*x+y*y), 0,
-      0,0,0,1
-    ];
-  }
-  function trsToMat4(node){
-    if(node.matrix) return node.matrix.slice();
-    const t=node.translation||[0,0,0], s=node.scale||[1,1,1];
-    const r=node.rotation?quatToMat4(node.rotation):[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
-    // scale
-    const sm=[s[0],0,0,0, 0,s[1],0,0, 0,0,s[2],0, 0,0,0,1];
-    const rs=new Float32Array(16);
-    mat4Multiply(rs,r,sm);
-    rs[12]=t[0]; rs[13]=t[1]; rs[14]=t[2];
-    return Array.from(rs);
-  }
-  function transformPoint(m,x,y,z){
-    return [
-      m[0]*x+m[4]*y+m[8]*z+m[12],
-      m[1]*x+m[5]*y+m[9]*z+m[13],
-      m[2]*x+m[6]*y+m[10]*z+m[14]
-    ];
-  }
-  function transformDir(m,x,y,z){
-    // rotation-only (ignores translation; assumes roughly uniform scale)
-    const v=[m[0]*x+m[4]*y+m[8]*z, m[1]*x+m[5]*y+m[9]*z, m[2]*x+m[6]*y+m[10]*z];
-    const l=Math.hypot(v[0],v[1],v[2])||1;
-    return [v[0]/l,v[1]/l,v[2]/l];
-  }
-
-  async function loadEmbeddedTexture(json,bin,textureIndex,imageURLCache){
-    if(textureIndex===undefined||textureIndex===null) return null;
-    const tex=json.textures[textureIndex];
-    const imgIndex=tex.source;
-    if(imageURLCache[imgIndex]===undefined){
-      const img=json.images[imgIndex];
-      if(img.bufferView!==undefined){
-        const bv=json.bufferViews[img.bufferView];
-        const bytes=new Uint8Array(bin,bv.byteOffset||0,bv.byteLength);
-        const blob=new Blob([bytes],{type:img.mimeType||"image/png"});
-        imageURLCache[imgIndex]=URL.createObjectURL(blob);
-      } else {
-        imageURLCache[imgIndex]=null; // external URI images not supported
-      }
-    }
-    const url=imageURLCache[imgIndex];
-    if(!url) return null;
-    const texIdx=textures.length;
-    textures.push(null);
-    loadTexture(url).then(t=>{textures[texIdx]=t;}).catch(err=>{
-      console.warn("[dev-editor] house texture failed to load:",err.message);
-    });
-    return texIdx;
-  }
-
-  async function convertMaterial(json,bin,materialIndex,imageURLCache){
-    if(materialIndex===undefined||materialIndex===null){
-      return {name:"ImportedDefault",baseColorTexture:null,metallicRoughnessTexture:null,occlusionTexture:null,
-              emissiveTexture:null,baseColorFactor:[0.8,0.8,0.8,1],metallicFactor:0,roughnessFactor:1,
-              emissiveFactor:[0,0,0],alphaMode:"OPAQUE",alphaCutoff:0.5,doubleSided:true,
-              uvScale:[1,1],uvOffset:[0,0],uvRotation:0};
-    }
-    const m=json.materials[materialIndex];
-    const pbr=m.pbrMetallicRoughness||{};
-    const baseColorTexture=pbr.baseColorTexture?await loadEmbeddedTexture(json,bin,pbr.baseColorTexture.index,imageURLCache):null;
-    const metallicRoughnessTexture=pbr.metallicRoughnessTexture?await loadEmbeddedTexture(json,bin,pbr.metallicRoughnessTexture.index,imageURLCache):null;
-    const occlusionTexture=m.occlusionTexture?await loadEmbeddedTexture(json,bin,m.occlusionTexture.index,imageURLCache):null;
-    const emissiveTexture=m.emissiveTexture?await loadEmbeddedTexture(json,bin,m.emissiveTexture.index,imageURLCache):null;
-    return {
-      name:m.name||"ImportedMaterial",
-      baseColorTexture,metallicRoughnessTexture,occlusionTexture,emissiveTexture,
-      baseColorFactor:pbr.baseColorFactor||[1,1,1,1],
-      metallicFactor:pbr.metallicFactor!==undefined?pbr.metallicFactor:1,
-      roughnessFactor:pbr.roughnessFactor!==undefined?pbr.roughnessFactor:1,
-      emissiveFactor:m.emissiveFactor||[0,0,0],
-      alphaMode:m.alphaMode||"OPAQUE", alphaCutoff:m.alphaCutoff!==undefined?m.alphaCutoff:0.5,
-      doubleSided:!!m.doubleSided, uvScale:[1,1], uvOffset:[0,0], uvRotation:0
-    };
-  }
-
-  async function importGLBFile(file,placeAt){
-    const buf=await file.arrayBuffer();
-    const {json,bin}=parseGLB(buf);
-    if(!bin) throw new Error("This .glb has no embedded binary data (external buffers aren't supported)");
-
-    const materialCache={}, imageURLCache={};
-    async function getMaterialIndex(gltfMatIndex){
-      const key=gltfMatIndex===undefined?"__default__":gltfMatIndex;
-      if(materialCache[key]!==undefined) return materialCache[key];
-      const mat=await convertMaterial(json,bin,gltfMatIndex,imageURLCache);
-      const idx=MATERIALS.length;
-      MATERIALS.push(mat);
-      materialCache[key]=idx;
-      return idx;
-    }
-
-    const createdIndices=[];
-    const scene=json.scenes[json.scene||0];
-    async function walkNode(nodeIndex,parentMatrix){
-      const node=json.nodes[nodeIndex];
-      const local=trsToMat4(node);
-      const world=new Float32Array(16);
-      mat4Multiply(world,parentMatrix,local);
-
-      if(node.mesh!==undefined){
-        const mesh=json.meshes[node.mesh];
-        for(let p=0;p<mesh.primitives.length;p++){
-          const prim=mesh.primitives[p];
-          if(prim.mode!==undefined && prim.mode!==4) continue; // TRIANGLES only
-          const rawPos=readAccessor(json,bin,prim.attributes.POSITION);
-          const vcount=rawPos.length/3;
-          const rawNorm=prim.attributes.NORMAL!==undefined?readAccessor(json,bin,prim.attributes.NORMAL):null;
-          const rawUV=prim.attributes.TEXCOORD_0!==undefined?readAccessor(json,bin,prim.attributes.TEXCOORD_0):null;
-          const idx=prim.indices!==undefined?readIndices(json,bin,prim.indices):
-                     Uint32Array.from({length:vcount},(_,i)=>i);
-
-          const out=new Float32Array(vcount*8);
-          for(let v=0;v<vcount;v++){
-            const [wx,wy,wz]=transformPoint(world,rawPos[v*3],rawPos[v*3+1],rawPos[v*3+2]);
-            out[v*8]=wx; out[v*8+1]=wy; out[v*8+2]=wz;
-            if(rawNorm){
-              const [nx,ny,nz]=transformDir(world,rawNorm[v*3],rawNorm[v*3+1],rawNorm[v*3+2]);
-              out[v*8+3]=nx; out[v*8+4]=ny; out[v*8+5]=nz;
-            } else { out[v*8+3]=0; out[v*8+4]=1; out[v*8+5]=0; }
-            out[v*8+6]=rawUV?rawUV[v*2]:0;
-            out[v*8+7]=rawUV?rawUV[v*2+1]:0;
-          }
-
-          const matIdx=await getMaterialIndex(prim.material);
-          const name=(mesh.name||node.name||("ImportedHouse"+nodeIndex))+"_"+p;
-          const part=uploadMeshPart(name,matIdx,out,idx);
-          part.offset={x:placeAt.x,y:placeAt.y,z:placeAt.z};
-          createdIndices.push(geometry.indexOf(part));
-        }
-      }
-      for(const c of (node.children||[])) await walkNode(c,world);
-    }
-
-    const identity=new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
-    for(const rootIndex of scene.nodes) await walkNode(rootIndex,identity);
-    return createdIndices;
-  }
-
-
   /* ---------------- Panel UI ---------------- */
   function buildPanel(){
     const style=document.createElement("style");
@@ -476,6 +272,8 @@
       <h3>HOUSE IMPORTER (.glb)</h3>
       <input id="devHouseFile" type="file" accept=".glb" multiple>
       <div id="devHouseStatus" class="hint">Select one or more .glb files (you can multi-select a whole folder's worth at once). Each is placed near where you're standing, then shows up in the dropdown above to reposition.</div>
+      <button id="devSaveLayout" class="secondary">Save layout (download houses.json)</button>
+      <div class="hint">Before saving: copy your .glb file(s) into a "houses" folder next to index.html (matching filenames). This button downloads houses.json — move that file next to index.html too. From then on, houses load automatically every time the game starts, no dev mode needed.</div>
 
       <hr>
       <div class="hint">Free cam (F) and collider view (C) work as normal right now — nothing special needed. Name labels above show live in the world while this panel is open. Type IAMDEV again to hide this panel.</div>
@@ -539,10 +337,11 @@
           const created=await importGLBFile(file,{x:base.x+spread,y:base.y,z:base.z});
           placed++;
           if(created.length) lastIndex=created[0];
+          placedHouses.push({fileName:file.name,partIndices:created});
           console.log(`[dev-editor] imported ${file.name}: ${created.length} mesh part(s)`);
         }catch(err){
           console.error(`[dev-editor] failed to import ${file.name}:`,err);
-          statusEl.textContent=`Failed: ${file.name} — ${err.message}`;
+          statusEl.textContent=`Failed: ${file.name} — ${err.message} (check the browser console for more detail)`;
         }
       }
       refreshPartSelect();
@@ -553,6 +352,40 @@
         syncPositionInputs();
       }
       if(placed>0) statusEl.textContent=`Placed ${placed} house(s) near you. Select them above to reposition.`;
+    });
+
+    panel.querySelector("#devSaveLayout").addEventListener("click",()=>{
+      const byFile={};
+      for(const h of placedHouses){
+        // A part may have been deleted/reset since import; skip anything gone.
+        const parts=h.partIndices
+          .map(i=>geometry[i])
+          .filter(Boolean)
+          .map(p=>p.offset||{x:0,y:0,z:0});
+        if(!parts.length) continue;
+        // Multiple imports of the same filename get merged into one manifest
+        // entry with all their parts concatenated, in import order.
+        if(!byFile[h.fileName]) byFile[h.fileName]=[];
+        byFile[h.fileName].push(...parts);
+      }
+      const manifest=Object.keys(byFile).map(fileName=>({
+        file:"houses/"+fileName,
+        parts:byFile[fileName]
+      }));
+      if(!manifest.length){
+        alert("No houses placed yet in this session — nothing to save.");
+        return;
+      }
+      const json=JSON.stringify(manifest,null,2);
+      const blob=new Blob([json],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url; a.download="houses.json"; a.click();
+      URL.revokeObjectURL(url);
+      console.log("[dev-editor] houses.json:\n"+json);
+      alert("houses.json downloaded. Move it into your project folder (next to index.html), "+
+            "and make sure the matching .glb file(s) are in a \"houses\" subfolder there too. "+
+            "Houses will then load automatically every time the game starts, dev mode or not.");
     });
 
     syncPositionInputs();
