@@ -636,6 +636,7 @@ function buildGeometry(){
 }
 
 let projection=new Float32Array(16),view=new Float32Array(16),modelMat=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
+const partModelMat=new Float32Array(16);
 let lastTime=performance.now();
 
 async function start(){
@@ -773,13 +774,28 @@ function render(now){
     if(m.occlusionTexture!==null){bindTexture(2,textures[m.occlusionTexture]);gl.uniform1i(U.ao,2);}
     if(m.emissiveTexture!==null){bindTexture(3,textures[m.emissiveTexture]);gl.uniform1i(U.emissive,3);}
 
+    // Per-part position offset: used by the optional dev road-editor
+    // (dev-editor.js, activated with the IAMDEV cheat code). Untouched parts
+    // have no .offset, so this is a no-op identity matrix — zero cost/behavior
+    // change unless something has actually been moved.
+    const off=part.offset;
+    if(off){
+      partModelMat.set([1,0,0,0, 0,1,0,0, 0,0,1,0, off.x,off.y,off.z,1]);
+      gl.uniformMatrix4fv(U.model,false,partModelMat);
+    } else {
+      gl.uniformMatrix4fv(U.model,false,modelMat);
+    }
+
     gl.bindVertexArray(part.vao);
     for(const cell of part.cells){
-      const nx=Math.max(cell.minX,Math.min(eye[0],cell.maxX));
-      const nz=Math.max(cell.minZ,Math.min(eye[2],cell.maxZ));
+      const cminX=off?cell.minX+off.x:cell.minX, cmaxX=off?cell.maxX+off.x:cell.maxX;
+      const cminY=off?cell.minY+off.y:cell.minY, cmaxY=off?cell.maxY+off.y:cell.maxY;
+      const cminZ=off?cell.minZ+off.z:cell.minZ, cmaxZ=off?cell.maxZ+off.z:cell.maxZ;
+      const nx=Math.max(cminX,Math.min(eye[0],cmaxX));
+      const nz=Math.max(cminZ,Math.min(eye[2],cmaxZ));
       const dx=nx-eye[0], dz=nz-eye[2];
       if(dx*dx+dz*dz>renderDistSq) continue;
-      if(aabbOutsideFrustum(cell)) continue;
+      if(aabbOutsideFrustum({minX:cminX,minY:cminY,minZ:cminZ,maxX:cmaxX,maxY:cmaxY,maxZ:cmaxZ})) continue;
       gl.drawElements(gl.TRIANGLES,cell.count,gl.UNSIGNED_INT,cell.offset);
       drawnTrisLastFrame+=cell.count/3;
     }
