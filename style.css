@@ -52,3 +52,17 @@ body.touch-device #touchStartOverlay.visible{display:flex}
 @media (orientation:portrait){
   body.touch-device #rotateOverlay{display:flex}
 }
+
+/* ---- Loading screen: shown until the world finishes loading, then faded
+   out by main.js. Sits on top of everything (highest z-index) so nothing
+   else is visible underneath while the game is still loading. ---- */
+#loadingScreen{position:fixed;inset:0;z-index:1000;background:#0a0e14 url("loading-screen.png") center/cover no-repeat;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+  padding-bottom:11%;transition:opacity .6s ease;}
+#loadingScreen.hidden{opacity:0;pointer-events:none;}
+#loadingBarTrack{width:44%;min-width:260px;height:14px;border-radius:8px;background:rgba(10,14,20,.55);
+  border:1px solid rgba(255,255,255,.35);overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.4);}
+#loadingBarFill{height:100%;width:0%;background:linear-gradient(90deg,#ffcf40,#ff7a18);
+  transition:width .35s ease;border-radius:8px 0 0 8px;}
+#loadingText{margin-top:14px;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  font-size:15px;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.7);letter-spacing:.02em;}
