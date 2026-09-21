@@ -158,11 +158,11 @@ async function loadEmbeddedOrDataURITexture(json,bin,textureIndex,imageURLCache)
       const bytes=new Uint8Array(bin,bv.byteOffset||0,bv.byteLength);
       const blob=new Blob([bytes],{type:img.mimeType||"image/png"});
       imageURLCache[imgIndex]=URL.createObjectURL(blob);
-    } else if(img.uri && img.uri.startsWith("data:")){
-      imageURLCache[imgIndex]=img.uri; // base64 data URI, usable directly as an <img> src
     } else if(img.uri){
-      console.warn("[houses] image",imgIndex,"references an external file ("+img.uri+") — only embedded/.glb images are supported, skipping this texture");
-      imageURLCache[imgIndex]=null;
+      // Either a data: URI (usable as-is) or an external path relative to
+      // index.html (e.g. "houses/some_textures/0.png") — both work directly
+      // as an <img> src, so no special-casing needed between them.
+      imageURLCache[imgIndex]=img.uri;
     } else {
       imageURLCache[imgIndex]=null;
     }
@@ -408,4 +408,35 @@ function buildStarterHouse(cx,cz){
   parts.forEach(p=>{ p.offset={x:cx,y:baseY,z:cz}; });
   console.log(`[houses] starter house placed at (${cx.toFixed(0)}, ${baseY.toFixed(1)}, ${cz.toFixed(0)})`);
   return parts;
+}
+
+/* ---------------- Ground collision from imported geometry ----------------
+   Used when replacing the whole map with an imported scene (see main.js):
+   extracts triangles from a list of `geometry` array indices (applying each
+   part's .offset), and rebuilds the global groundTris/groundGrid that
+   raycastGroundHeight() reads every frame — the same collision path the
+   original city used, just fed from imported geometry instead. There's no
+   equivalent "wall" classification here (nothing in an arbitrary imported
+   scene is labeled the way the city's "Railing" material was), so this is
+   ground-only: the player can walk on the imported geometry, but nothing
+   in it blocks horizontal movement the way city railings did. */
+function rebuildGroundFromImportedParts(partIndices){
+  const arr=[];
+  for(const idx of partIndices){
+    const part=geometry[idx];
+    if(!part) continue;
+    const off=part.offset||{x:0,y:0,z:0};
+    for(let k=0;k<part.idx.length;k+=3){
+      const i0=part.idx[k],i1=part.idx[k+1],i2=part.idx[k+2];
+      const b0=i0*8,b1=i1*8,b2=i2*8;
+      arr.push(
+        part.pos[b0]+off.x,   part.pos[b0+1]+off.y, part.pos[b0+2]+off.z,
+        part.pos[b1]+off.x,   part.pos[b1+1]+off.y, part.pos[b1+2]+off.z,
+        part.pos[b2]+off.x,   part.pos[b2+1]+off.y, part.pos[b2+2]+off.z
+      );
+    }
+  }
+  groundTris=new Float32Array(arr);
+  groundGrid=buildGrid(groundTris,CELL_SIZE);
+  console.log(`[houses] ground collision rebuilt from ${partIndices.length} imported parts, ${(arr.length/9).toLocaleString()} triangles`);
 }
