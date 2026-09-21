@@ -158,11 +158,11 @@ async function loadEmbeddedOrDataURITexture(json,bin,textureIndex,imageURLCache)
       const bytes=new Uint8Array(bin,bv.byteOffset||0,bv.byteLength);
       const blob=new Blob([bytes],{type:img.mimeType||"image/png"});
       imageURLCache[imgIndex]=URL.createObjectURL(blob);
-    } else if(img.uri && img.uri.startsWith("data:")){
-      imageURLCache[imgIndex]=img.uri; // base64 data URI, usable directly as an <img> src
     } else if(img.uri){
-      console.warn("[houses] image",imgIndex,"references an external file ("+img.uri+") — only embedded/.glb images are supported, skipping this texture");
-      imageURLCache[imgIndex]=null;
+      // Either a data: URI (usable as-is) or an external path relative to
+      // index.html (e.g. "houses/some_textures/0.png") — both work directly
+      // as an <img> src, so no special-casing needed between them.
+      imageURLCache[imgIndex]=img.uri;
     } else {
       imageURLCache[imgIndex]=null;
     }
