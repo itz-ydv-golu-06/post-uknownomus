@@ -33,6 +33,7 @@ function hideLoadingScreen(){
 }
 
 (async ()=>{
+try{
   await setLoadingProgress(3, "Starting engine…");
   await start();
 
@@ -71,4 +72,12 @@ function hideLoadingScreen(){
 
   await setLoadingProgress(100, "Ready!");
   setTimeout(hideLoadingScreen, 300);
+}catch(err){
+  // Any failure here (a script that didn't load, a ReferenceError, anything)
+  // now shows directly on the loading screen instead of freezing it silently
+  // with no explanation — check this message first if loading ever stalls.
+  console.error("[main] fatal error during load:", err);
+  loadingBarFillEl.style.background = "#e33";
+  loadingTextEl.textContent = "Load failed: " + err.message + " — check the browser console (F12) for details.";
+}
 })();

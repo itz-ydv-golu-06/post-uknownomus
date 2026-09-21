@@ -56,7 +56,7 @@ body.touch-device #touchStartOverlay.visible{display:flex}
 /* ---- Loading screen: shown until the world finishes loading, then faded
    out by main.js. Sits on top of everything (highest z-index) so nothing
    else is visible underneath while the game is still loading. ---- */
-#loadingScreen{position:fixed;inset:0;z-index:1000;background:#0a0e14 url("loading-screen.png") center/cover no-repeat;
+#loadingScreen{position:fixed;inset:0;z-index:1000;background:#0a0e14 url("loading-screen.png") center/contain no-repeat;
   display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
   padding-bottom:11%;transition:opacity .6s ease;}
 #loadingScreen.hidden{opacity:0;pointer-events:none;}
